@@ -37,6 +37,21 @@ class Grid(tk.LabelFrame):
             row += 1
 
 
+class CGrid(tk.LabelFrame):
+    def __init__(self, *args, **kwargs):
+        tk.LabelFrame.__init__(self, *args, **kwargs)
+
+        self.grid_columnconfigure(1, weight=1)
+
+        tk.Label(self, text='Stop sound').grid(row=0, column=0, sticky=tk.E)
+        tk.Button(self, command=stop, text="Stop", padx=10).grid(row=0, column=1)
+
+        tk.Label(self, text='Volume').grid(row=1, column=0, sticky=tk.E)
+        volume_slider = tk.Scale(self, from_=0, to=100, orient=tk.HORIZONTAL, tickinterval=100, command=change_volume)
+        volume_slider.set(50)
+        volume_slider.grid(row=1, column=1, sticky='ew')
+
+
 def play(sfx):
     pygame.mixer.music.unload()
     pygame.mixer.music.load('sfx/' + sfx)
@@ -47,17 +62,24 @@ def stop():
     pygame.mixer.music.stop()
 
 
+def change_volume(vol: str):
+    pygame.mixer.music.set_volume(int(vol) / 100)
+
+
 if __name__ == "__main__":
     root = tk.Tk()
     root.resizable(width=True, height=True)
     root.title("Soundboard")
-    # root.geometry("720x480")
     pygame.mixer.init()
 
     # controls
-    tk.Button(root, command=stop, text="Stop", padx=10).pack()
+    CGrid(root, text="Controls").pack(fill="both", expand=True, padx=10, pady=10)
 
     # sounds
-    Grid(root, text="Sounds").pack(side="top", fill="both", expand=True, padx=10, pady=10)
+    Grid(root, text="Sounds").pack(fill="both", expand=True, padx=10, pady=10)
+
+    # geometry
+    tk.Label(root, text='', width=40).pack(fill="both")
+
 
     root.mainloop()
