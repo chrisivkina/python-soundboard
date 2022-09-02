@@ -105,8 +105,8 @@ if __name__ == "__main__":
 
     init_sound_settings()
 
-    # tip
-    tk.Label(text='Make sure you have VB Audio Virtual Cable\ninstalled, and you have "listen to this device" on.').pack()
+    # # tip
+    # tk.Label(text='Make sure you have VB Audio Virtual Cable\ninstalled, and you have "listen to this device" on.').pack()
 
     # controls
     ControlGrid(root, text="Controls").pack(fill="both", expand=True, padx=10, pady=10)
