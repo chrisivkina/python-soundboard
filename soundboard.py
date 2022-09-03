@@ -5,13 +5,25 @@ from pygame import _sdl2
 import os
 import threading
 import random
-# from system_hotkey import SystemHotkey
+from system_hotkey import SystemHotkey
 
 # Gets sfx files from <current directory>/sfx
 sfx_dir = './sfx'
 
-# TODO: Add keybind system
-#   use SystemHotkey
+
+def keybind_listener():
+    hk = SystemHotkey()
+
+    qwerty = list('1234567890qwertyuiopasdfghjklzxcvbnm')
+    sfx = get_sfx()
+
+    # sfx keybinds
+    for i in range(0, len(sfx)):
+        hk.register(['alt', qwerty[i]], callback=lambda event, s=sfx[i][0]: play(s))
+
+    # control keybinds
+    hk.register(['alt', 'f1'], callback=lambda event: stop())
+    hk.register(['alt', 'f2'], callback=lambda event: random_sound())
 
 
 def get_sfx():
@@ -32,15 +44,18 @@ class SoundGrid(tk.LabelFrame):
         self.grid_columnconfigure(1, weight=1)
         tk.Label(self, text="Nr.", anchor="w").grid(row=0, column=0, sticky="ew")
         tk.Label(self, text="Sound Effects", anchor="w").grid(row=0, column=3, sticky="ew")
+        tk.Label(self, text="Hotkeys", anchor="w").grid(row=0, column=4, sticky="ew")
+        qwerty = list('1234567890qwertyuiopasdfghjklzxcvbnm')
 
         row = 1
         for (file, name) in data:
             nr_label = tk.Label(self, text=str(row), anchor="w")
-
             action_button = tk.Button(self, text=name, command=lambda f=file: play(f))
+            hotkey_label = tk.Label(self, text=f'alt+{qwerty[row-1]}')
 
             nr_label.grid(row=row, column=0, sticky="ew")
             action_button.grid(row=row, column=3, sticky="ew")
+            hotkey_label.grid(row=row, column=4, sticky="ew")
 
             row += 1
 
@@ -72,10 +87,10 @@ class ControlGrid(tk.LabelFrame):
             return row_n
 
         tk.Label(self, text='Stop sound').grid(row=get_row_n(), column=0, sticky=tk.E)
-        tk.Button(self, command=stop, text="Stop", padx=10).grid(row=get_row_n(), column=1, sticky='ew')
+        tk.Button(self, command=stop, text="Stop (ctrl+F1)", padx=10).grid(row=get_row_n(), column=1, sticky='ew')
 
         tk.Label(self, text='Random sound').grid(row=get_row_n(), column=0, sticky=tk.E)
-        tk.Button(self, command=random_sound, text="Random", padx=10).grid(row=get_row_n(), column=1, sticky='ew')
+        tk.Button(self, command=random_sound, text="Random (ctrl+F2)", padx=10).grid(row=get_row_n(), column=1, sticky='ew')
 
         tk.Label(self, text='Volume').grid(row=get_row_n(), column=0, sticky=tk.E)
         volume_slider = tk.Scale(self, from_=0, to=100, orient=tk.HORIZONTAL, tickinterval=100, command=change_volume)
@@ -109,11 +124,10 @@ def play(sfx):
 
 
 def stop():
-    if _async:
-        for i in range(0, channel_amount):
-            pygame.mixer.Channel(i).stop()
-    else:
-        pygame.mixer.music.stop()
+    for i in range(0, channel_amount):
+        pygame.mixer.Channel(i).stop()
+
+    pygame.mixer.music.stop()
 
 
 def random_sound():
@@ -176,4 +190,5 @@ if __name__ == "__main__":
     # geometry
     tk.Label(root, text='', width=50).pack(fill="both")
 
+    keybind_listener()
     root.mainloop()
