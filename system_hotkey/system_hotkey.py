@@ -1,3 +1,6 @@
+# Copyright (c) 2015, tim
+# All rights reserved.
+
 import os
 import _thread as thread
 import queue
