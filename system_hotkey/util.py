@@ -1,3 +1,6 @@
+# Copyright (c) 2015, tim
+# All rights reserved.
+
 import _thread as thread
 import threading
 from queue import Queue
