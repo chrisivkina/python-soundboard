@@ -3,9 +3,15 @@ from tkinter import ttk
 import pygame
 from pygame import _sdl2
 import os
+import threading
+import random
+# from system_hotkey import SystemHotkey
 
 # Gets sfx files from <current directory>/sfx
 sfx_dir = './sfx'
+
+# TODO: Add keybind system
+#   use SystemHotkey
 
 
 def get_sfx():
@@ -30,6 +36,7 @@ class SoundGrid(tk.LabelFrame):
         row = 1
         for (file, name) in data:
             nr_label = tk.Label(self, text=str(row), anchor="w")
+
             action_button = tk.Button(self, text=name, command=lambda f=file: play(f))
 
             nr_label.grid(row=row, column=0, sticky="ew")
@@ -43,31 +50,75 @@ class ControlGrid(tk.LabelFrame):
         tk.LabelFrame.__init__(self, *args, **kwargs)
 
         self.grid_columnconfigure(1, weight=1)
+        row_n = -1
+        x = 0
 
-        tk.Label(self, text='Stop sound').grid(row=0, column=0, sticky=tk.E)
-        tk.Button(self, command=stop, text="Stop", padx=10).grid(row=0, column=1, sticky='ew')
+        def get_row_n():
+            nonlocal row_n
+            nonlocal x
 
-        tk.Label(self, text='Volume').grid(row=1, column=0, sticky=tk.E)
+            if x == 0:
+                x += 1
+                row_n += 1
+                return row_n
+            else:
+                x = 0
+                return row_n
+
+        def get_row_cb():
+            nonlocal row_n
+
+            row_n += 1
+            return row_n
+
+        tk.Label(self, text='Stop sound').grid(row=get_row_n(), column=0, sticky=tk.E)
+        tk.Button(self, command=stop, text="Stop", padx=10).grid(row=get_row_n(), column=1, sticky='ew')
+
+        tk.Label(self, text='Random sound').grid(row=get_row_n(), column=0, sticky=tk.E)
+        tk.Button(self, command=random_sound, text="Random", padx=10).grid(row=get_row_n(), column=1, sticky='ew')
+
+        tk.Label(self, text='Volume').grid(row=get_row_n(), column=0, sticky=tk.E)
         volume_slider = tk.Scale(self, from_=0, to=100, orient=tk.HORIZONTAL, tickinterval=100, command=change_volume)
         volume_slider.set(50)
-        volume_slider.grid(row=1, column=1, sticky='ew')
+        volume_slider.grid(row=get_row_n(), column=1, sticky='ew')
 
         choices = get_devices()
-        tk.Label(self, text='Playback Device').grid(row=2, column=0, sticky=tk.E)
+        tk.Label(self, text='Playback Device').grid(row=get_row_n(), column=0, sticky=tk.E)
         opts = ttk.Combobox(self, values=choices, state='readonly')
         opts.bind('<<ComboboxSelected>>', change_device)
         opts.set('CABLE Input (VB-Audio Virtual Cable)' if 'CABLE Input (VB-Audio Virtual Cable)' in choices else choices[0])
-        opts.grid(row=2, column=1, sticky='ew')
+        opts.grid(row=get_row_n(), column=1, sticky='ew')
+
+        cb_value = tk.IntVar()
+        cb = ttk.Checkbutton(self, text="Allow simultaneous playback", onvalue=1, offvalue=0, command=lambda: async_callback(get_cb_value()), variable=cb_value)
+        cb.grid(row=get_row_cb(), column=1, sticky='w')
+
+        def get_cb_value(): return cb_value.get()
 
 
 def play(sfx):
-    pygame.mixer.music.unload()
-    pygame.mixer.music.load('sfx/' + sfx)
-    pygame.mixer.music.play()
+    if _async:
+        def play_nested():
+            channel = pygame.mixer.find_channel()
+            channel.play(pygame.mixer.Sound('sfx/' + sfx))
+        threading.Thread(target=play_nested).start()
+    else:
+        pygame.mixer.music.unload()
+        pygame.mixer.music.load('sfx/' + sfx)
+        pygame.mixer.music.play()
 
 
 def stop():
-    pygame.mixer.music.stop()
+    if _async:
+        for i in range(0, channel_amount):
+            pygame.mixer.Channel(i).stop()
+    else:
+        pygame.mixer.music.stop()
+
+
+def random_sound():
+    sfx = random.choice(get_sfx())
+    play(sfx[0])
 
 
 def change_volume(vol: str):
@@ -84,26 +135,34 @@ def get_devices():
     return pygame._sdl2.audio.get_audio_device_names(False)
 
 
-def init_sound_settings():
-    pygame.mixer.init()
-    outputs = get_devices()
-    pygame.mixer.quit()
+def async_callback(v):
+    global _async
 
-    if 'CABLE Input (VB-Audio Virtual Cable)' in outputs:
-        print('Using VB-Audio Virtual Cable')
-        pygame.mixer.init(devicename='CABLE Input (VB-Audio Virtual Cable)')
-    else:
-        print('VB Audio Virtual Cable was not found on your system.')
-        pygame.mixer.init()
-
-    pygame.mixer.music.set_volume(0.5)
+    _async = v
 
 
 if __name__ == "__main__":
     root = tk.Tk()
     root.title("Soundboard")
 
-    init_sound_settings()
+    pygame.init()
+
+    pygame.mixer.init()
+    outputs = get_devices()
+
+    _async = 0
+
+    if 'CABLE Input (VB-Audio Virtual Cable)' in outputs:
+        print('Using VB-Audio Virtual Cable')
+        pygame.mixer.quit()
+        pygame.mixer.init(devicename='CABLE Input (VB-Audio Virtual Cable)')
+    else:
+        print('VB Audio Virtual Cable was not found on your system.')
+
+    pygame.mixer.music.set_volume(0.5)
+
+    channel_amount = 256
+    pygame.mixer.set_num_channels(channel_amount)
 
     # # tip
     # tk.Label(text='Make sure you have VB Audio Virtual Cable\ninstalled, and you have "listen to this device" on.').pack()
