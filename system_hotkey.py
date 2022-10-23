@@ -1,17 +1,12 @@
-# Copyright (c) 2015, tim
-# All rights reserved.
-
 import os
 import _thread as thread
-import queue
 import time
 import collections
 import struct
-
-try:
-    from . import util
-except SystemError:
-    import util
+import threading
+from queue import Queue
+import queue
+from functools import wraps
 
 
 class SystemHotkeyError(Exception): pass
@@ -24,6 +19,234 @@ class UnregisterError(SystemHotkeyError): pass
 
 
 class InvalidKeyError(SystemHotkeyError): pass
+
+
+def bind_global_key(event_type, key_string, cb):
+    return bind_key(event_type, root, key_string, cb)
+
+
+def bind_key(event_type, wid, key_string, cb):
+    assert event_type in ('KeyPress', 'KeyRelease')
+
+    mods, kc = parse_keystring(key_string)
+    key = (wid, mods, kc)
+
+    if not kc:
+        print('Could not find a keycode for %s' % key_string, file=sys.stderr)
+        return False
+
+    if not __keygrabs[key] and not grab_key(wid, mods, kc):
+        return False
+
+    __keybinds[key].append(cb)
+    __keygrabs[key] += 1
+
+    if not event.is_connected(event_type, wid, __run_keybind_callbacks):
+        event.connect(event_type, wid, __run_keybind_callbacks)
+
+    return True
+
+
+def parse_keystring(key_string):
+    modifiers = 0
+    keycode = None
+
+    for part in key_string.split('-'):
+        if hasattr(xproto.KeyButMask, part):
+            modifiers |= getattr(xproto.KeyButMask, part)
+        else:
+            if len(part) == 1:
+                part = part.lower()
+            keycode = lookup_string(part)
+
+    return modifiers, keycode
+
+
+def lookup_string(kstr):
+    if kstr in keysyms:
+        return get_keycode(keysyms[kstr])
+    elif len(kstr) > 1 and kstr.capitalize() in keysyms:
+        return get_keycode(keysyms[kstr.capitalize()])
+
+    return None
+
+
+def lookup_keysym(keysym):
+    return get_keysym_string(keysym)
+
+
+def get_min_max_keycode():
+    return conn.get_setup().min_keycode, conn.get_setup().max_keycode
+
+
+def get_keyboard_mapping():
+    mn, mx = get_min_max_keycode()
+
+    return conn.core.GetKeyboardMapping(mn, mx - mn + 1)
+
+
+def get_keyboard_mapping_unchecked():
+    mn, mx = get_min_max_keycode()
+
+    return conn.core.GetKeyboardMappingUnchecked(mn, mx - mn + 1)
+
+
+def get_keysym(keycode, col=0, kbmap=None):
+    if kbmap is None:
+        kbmap = __kbmap
+
+    mn, mx = get_min_max_keycode()
+    per = kbmap.keysyms_per_keycode
+    ind = (keycode - mn) * per + col
+
+    return kbmap.keysyms[ind]
+
+
+def get_keysym_string(keysym):
+    return keysym_strings.get(keysym, [None])[0]
+
+
+def get_keycode(keysym):
+    mn, mx = get_min_max_keycode()
+    cols = __kbmap.keysyms_per_keycode
+    for i in range(mn, mx + 1):
+        for j in range(0, cols):
+            ks = get_keysym(i, col=j)
+            if ks == keysym:
+                return i
+
+    return None
+
+
+def get_mod_for_key(keycode):
+    return __keysmods.get(keycode, 0)
+
+
+def get_keys_to_mods():
+    mm = xproto.ModMask
+    modmasks = [mm.Shift, mm.Lock, mm.Control, mm._1, mm._2, mm._3, mm._4, mm._5]  # order matters
+
+    mods = conn.core.GetModifierMapping().reply()
+
+    res = {}
+    keyspermod = mods.keycodes_per_modifier
+    for mmi in range(0, len(modmasks)):
+        row = mmi * keyspermod
+        for kc in mods.keycodes[row:row + keyspermod]:
+            res[kc] = modmasks[mmi]
+
+    return res
+
+
+def get_modifiers(state):
+    ret = []
+
+    if state & xproto.ModMask.Shift:
+        ret.append('Shift')
+    if state & xproto.ModMask.Lock:
+        ret.append('Lock')
+    if state & xproto.ModMask.Control:
+        ret.append('Control')
+    if state & xproto.ModMask._1:
+        ret.append('Mod1')
+    if state & xproto.ModMask._2:
+        ret.append('Mod2')
+    if state & xproto.ModMask._3:
+        ret.append('Mod3')
+    if state & xproto.ModMask._4:
+        ret.append('Mod4')
+    if state & xproto.ModMask._5:
+        ret.append('Mod5')
+    if state & xproto.KeyButMask.Button1:
+        ret.append('Button1')
+    if state & xproto.KeyButMask.Button2:
+        ret.append('Button2')
+    if state & xproto.KeyButMask.Button3:
+        ret.append('Button3')
+    if state & xproto.KeyButMask.Button4:
+        ret.append('Button4')
+    if state & xproto.KeyButMask.Button5:
+        ret.append('Button5')
+
+    return ret
+
+
+def grab_keyboard(grab_win):
+    return conn.core.GrabKeyboard(False, grab_win, xproto.Time.CurrentTime,
+                                  GM.Async, GM.Async).reply()
+
+
+def ungrab_keyboard():
+    conn.core.UngrabKeyboardChecked(xproto.Time.CurrentTime).check()
+
+
+def grab_key(wid, modifiers, key):
+    try:
+        for mod in TRIVIAL_MODS:
+            conn.core.GrabKeyChecked(True, wid, modifiers | mod, key, GM.Async,
+                                     GM.Async).check()
+
+        return True
+    except xproto.BadAccess:
+        return False
+
+
+def ungrab_key(wid, modifiers, key):
+    try:
+        for mod in TRIVIAL_MODS:
+            conn.core.UngrabKeyChecked(key, wid, modifiers | mod).check()
+        return True
+    except xproto.BadAccess:
+        return False
+
+
+def update_keyboard_mapping(e):
+    global __kbmap, __keysmods
+
+    newmap = get_keyboard_mapping().reply()
+
+    if e is None:
+        __kbmap = newmap
+        __keysmods = get_keys_to_mods()
+        return
+
+    if e.request == xproto.Mapping.Keyboard:
+        changes = {}
+        for kc in range(*get_min_max_keycode()):
+            knew = get_keysym(kc, kbmap=newmap)
+            oldkc = get_keycode(knew)
+            if oldkc != kc:
+                changes[oldkc] = kc
+
+        __kbmap = newmap
+        __regrab(changes)
+    elif e.request == xproto.Mapping.Modifier:
+        __keysmods = get_keys_to_mods()
+
+
+def __run_keybind_callbacks(e):
+    kc, mods = e.detail, e.state
+    for mod in TRIVIAL_MODS:
+        mods &= ~mod
+
+    key = (e.event, mods, kc)
+    for cb in __keybinds.get(key, []):
+        try:
+            cb(e)
+        except TypeError:
+            cb()
+
+
+def __regrab(changes):
+    for wid, mods, kc in __keybinds:
+        if kc in changes:
+            ungrab_key(wid, mods, kc)
+            grab_key(wid, mods, changes[kc])
+
+            old = (wid, mods, kc)
+            new = (wid, mods, changes[kc])
+            __keybinds[new] = __keybinds[old]
+            del __keybinds[old]
 
 
 if os.name == 'nt':
@@ -126,19 +349,41 @@ if os.name == 'nt':
         "f12": win32con.VK_F12
     }
     win_modders = {
-        "shift": win32con.MOD_SHIFT
-        , "control": win32con.MOD_CONTROL
-        , "alt": win32con.MOD_ALT
-        , "super": win32con.MOD_WIN
+        "shift": win32con.MOD_SHIFT,
+        "control": win32con.MOD_CONTROL,
+        "alt": win32con.MOD_ALT,
+        "super": win32con.MOD_WIN
     }
     win_trivial_mods = (
         0,
     )
 else:
-    try:
-        from . import xpybutil_keybind as keybind
-    except SystemError:
-        import xpybutil_keybind as keybind
+    from collections import defaultdict
+    import sys
+
+    from xcffib import xproto
+
+    from xpybutil import conn, root, event
+    from xpybutil.keysymdef import keysyms, keysym_strings
+
+    __kbmap = None
+    __keysmods = None
+
+    __keybinds = defaultdict(list)
+    __keygrabs = defaultdict(int)  # Key grab key -> number of grabs
+
+    EM = xproto.EventMask
+    GM = xproto.GrabMode
+    TRIVIAL_MODS = [
+        0,
+        xproto.ModMask.Lock,
+        xproto.ModMask._2,
+        xproto.ModMask.Lock | xproto.ModMask._2
+    ]
+
+    if conn is not None:
+        update_keyboard_mapping(None)
+        event.connect('MappingNotify', None, update_keyboard_mapping)
 
     try:
         import xcffib
@@ -231,6 +476,96 @@ class Aliases:
         return self.aliases.get(thing, nonecase)
 
 
+def unique_int(values):
+    last = 0
+    for _ in values:
+        if last not in values:
+            break
+        else:
+            last += 1
+    return last
+
+
+class ExceptionSerializer:
+    def __init__(self):
+        self.queue = queue.Queue()
+
+    def catch_and_raise(self, func, timeout=0.5):
+        self.wait_event(func, timeout)
+        self._check_for_errors()
+
+    def mark_done(self, function):
+        self.init_wrap(function)
+
+        @wraps(function)
+        def decorator(*args, **kwargs):
+            self.clear_event(function)
+            try:
+                results = function(*args, **kwargs)
+            except Exception as err:
+                self.queue.put(err)
+            else:
+                return results
+            finally:
+                self.set_event(function)
+
+        return decorator
+
+    def put(self, x):
+        self.queue.put(x)
+
+    def init_wrap(self, func):
+        name = self._make_event_name(func)
+        e = threading.Event()
+        setattr(self, name, e)
+
+    def _check_for_errors(self):
+        try:
+            error = self.queue.get(block=False)
+        except queue.Empty:
+            pass
+        else:
+            raise error
+
+    @staticmethod
+    def _make_event_name(func):
+        return '_event_' + func.__name__
+
+    def get_event(self, func):
+        return getattr(self, self._make_event_name(func))
+
+    def set_event(self, func):
+        self.get_event(func).set()
+
+    def clear_event(self, func):
+        self.get_event(func).clear()
+
+    def wait_event(self, func, *args):
+        self.get_event(func).wait(*args)
+
+
+class CallSerializer:
+    def __init__(self):
+        self.queue = Queue()
+        thread.start_new_thread(self.call_functions, (),)
+        self.bug_catcher = ExceptionSerializer()
+
+    def call_functions(self):
+        while 1:
+            func, args, kwargs = self.queue.get(block=True)
+            func(*args, **kwargs)
+
+    def serialize_call(self, timeout=0.5):
+        def state(function):
+            @wraps(function)
+            def decorator(*args, **kwargs):
+                mark_func = self.bug_catcher.mark_done(function)
+                self.queue.put((mark_func, args, kwargs))
+                self.bug_catcher.catch_and_raise(function, timeout)
+            return decorator
+        return state
+
+
 NUMPAD_ALIASES = Aliases(
     ('kp_1', 'kp_end',),
     ('kp_2', 'kp_down',),
@@ -243,7 +578,7 @@ NUMPAD_ALIASES = Aliases(
     ('kp_9', 'kp_prior', 'kp_page_up'),
 )
 
-thread_safe = util.CallSerializer()
+thread_safe = CallSerializer()
 
 
 class MixIn:
@@ -265,8 +600,8 @@ class MixIn:
 
         if os.name == 'nt':
             def nt_register():
-                uniq = util.unique_int(self.hk_ref.keys())
-                self.hk_ref[uniq] = ((keycode, masks))
+                uniq = unique_int(self.hk_ref.keys())
+                self.hk_ref[uniq] = (keycode, masks)
                 self._the_grab(keycode, masks, uniq)
 
             self.hk_action_queue.put(lambda: nt_register())
@@ -324,7 +659,8 @@ class MixIn:
             masks = 0
         return keycode, masks
 
-    def or_modifiers_together(self, modifiers):
+    @staticmethod
+    def or_modifiers_together(modifiers):
         result = 0
         for part in modifiers:
             result |= part
@@ -345,17 +681,17 @@ class MixIn:
                     except (KeyError, TypeError):
                         pass
 
-    def parse_event(self, event):
+    def parse_event(self, e):
         hotkey = []
         if os.name == 'posix':
             try:
-                hotkey += self.get_modifiersym(event.state)
+                hotkey += self.get_modifiersym(e.state)
             except AttributeError:
                 return None
 
-            hotkey.append(self._get_keysym(event.detail).lower())
+            hotkey.append(self._get_keysym(e.detail).lower())
         else:
-            keycode, modifiers = self.hk_ref[event.wParam][0], self.hk_ref[event.wParam][1]
+            keycode, modifiers = self.hk_ref[e.wParam][0], self.hk_ref[e.wParam][1]
             hotkey += self.get_modifiersym(modifiers)
             hotkey.append(self._get_keysym(keycode).lower())
 
@@ -385,7 +721,7 @@ class SystemHotkey(MixIn):
     hk_ref = {}
     keybinds = {}
 
-    def __init__(self, consumer='callback', check_queue_interval=0.0001, use_xlib=False, conn=None,
+    def __init__(self, consumer='callback', check_queue_interval=0.0001, use_xlib=False, _conn=None,
                  unite_kp=True):
         self.use_xlib = use_xlib
         self.consumer = consumer
@@ -394,21 +730,21 @@ class SystemHotkey(MixIn):
         if os.name == 'posix' and not unite_kp:
             raise NotImplementedError
 
-        def mark_event_type(event):
+        def mark_event_type(e):
             if os.name == 'posix':
                 if self.use_xlib:
-                    if event.type == X.KeyPress:
-                        event.event_type = 'keypress'
-                    elif event.type == X.KeyRelease:
-                        event.event_type = 'keyrelease'
+                    if e.type == X.KeyPress:
+                        e.event_type = 'keypress'
+                    elif e.type == X.KeyRelease:
+                        e.event_type = 'keyrelease'
                 else:
-                    if isinstance(event, xproto.KeyPressEvent):
-                        event.event_type = 'keypress'
-                    if isinstance(event, xproto.KeyReleaseEvent):
-                        event.event_type = 'keyrelease'
+                    if isinstance(e, xproto.KeyPressEvent):
+                        e.event_type = 'keypress'
+                    if isinstance(e, xproto.KeyReleaseEvent):
+                        e.event_type = 'keyrelease'
             else:
-                event.event_type = 'keypress'
-            return event
+                e.event_type = 'keypress'
+            return e
 
         self.data_queue = queue.Queue()
         if os.name == 'nt':
@@ -427,10 +763,10 @@ class SystemHotkey(MixIn):
             self._the_grab = self._xlib_the_grab
             self._get_keycode = self._xlib_get_keycode
             self._get_keysym = self._xlib_get_keysym
-            if not conn:
+            if not _conn:
                 self.disp = Display()
             else:
-                self.disp = conn
+                self.disp = _conn
             self.xRoot = self.disp.screen().root
             self.xRoot.change_attributes(event_mask=X.KeyPressMask)
 
@@ -442,10 +778,10 @@ class SystemHotkey(MixIn):
             self._the_grab = self._xcb_the_grab
             self._get_keycode = self._xcb_get_keycode
             self._get_keysym = self._xcb_get_keysym
-            if not conn:
+            if not _conn:
                 self.conn = xcffib.connect()
             else:
-                self.conn = conn
+                self.conn = _conn
             self.root = self.conn.get_setup().roots[0].root
 
             thread.start_new_thread(self._xcb_wait, (), )
@@ -456,17 +792,17 @@ class SystemHotkey(MixIn):
                 while 1:
                     time.sleep(self.check_queue_interval)
                     try:
-                        event = self.data_queue.get(block=False)
+                        e = self.data_queue.get(block=False)
                     except queue.Empty:
                         pass
                     else:
-                        event = mark_event_type(event)
-                        hotkey = self.parse_event(event)
+                        e = mark_event_type(e)
+                        hotkey = self.parse_event(e)
                         if not hotkey:
                             continue
                         for cb in self.get_callback(hotkey):
-                            if event.event_type == 'keypress':
-                                cb(event)
+                            if e.event_type == 'keypress':
+                                cb(e)
 
             thread.start_new_thread(thread_me, (), )
 
@@ -475,16 +811,16 @@ class SystemHotkey(MixIn):
                 while 1:
                     time.sleep(self.check_queue_interval)
                     try:
-                        event = self.data_queue.get(block=False)
+                        e = self.data_queue.get(block=False)
                     except queue.Empty:
                         pass
                     else:
-                        hotkey = self.parse_event(mark_event_type(event))
+                        hotkey = self.parse_event(mark_event_type(e))
                         if not hotkey:
                             continue
-                        if event.event_type == 'keypress':
+                        if e.event_type == 'keypress':
                             args = [cb for cb in self.get_callback(hotkey)]
-                            consumer(event, hotkey, args)
+                            consumer(e, hotkey, args)
 
             thread.start_new_thread(thread_me, (), )
         else:
@@ -492,13 +828,13 @@ class SystemHotkey(MixIn):
 
     def _xlib_wait(self):
         while 1:
-            event = self.xRoot.display.next_event()
-            self.data_queue.put(event)
+            e = self.xRoot.display.next_event()
+            self.data_queue.put(e)
 
     def _xcb_wait(self):
         while 1:
-            event = self.conn.wait_for_event()
-            self.data_queue.put(event)
+            e = self.conn.wait_for_event()
+            self.data_queue.put(e)
 
     def _nt_wait(self):
         msg = ctypes.wintypes.MSG()
@@ -553,7 +889,7 @@ class SystemHotkey(MixIn):
 
     def _xlib_get_keysym(self, keycode, i=0):
         keysym = self.disp.keycode_to_keysym(keycode, i)
-        return keybind.keysym_strings.get(keysym, [None])[0]
+        return keysym_strings.get(keysym, [None])[0]
 
     def _xlib_the_grab(self, keycode, masks):
         for triv_mod in self.trivial_mods:
@@ -577,11 +913,11 @@ class SystemHotkey(MixIn):
 
     @staticmethod
     def _xcb_get_keycode(key):
-        return keybind.lookup_string(key)
+        return lookup_string(key)
 
     @staticmethod
     def _xcb_get_keysym(keycode, i=0):
-        keysym = keybind.get_keysym(keycode, i)
-        return keybind.keysym_strings.get(keysym, [None])[0]
+        keysym = get_keysym(keycode, i)
+        return keysym_strings.get(keysym, [None])[0]
 
 # this entire module is a massive mess
